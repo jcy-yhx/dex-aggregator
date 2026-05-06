@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+contracts/out/
+contracts/cache/
+web/.next/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
