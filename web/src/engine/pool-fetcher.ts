@@ -84,13 +84,15 @@ async function fetchAllPools(): Promise<PoolEdge[]> {
 
 let _cachedPools: PoolEdge[] | null = null;
 let _cacheTime = 0;
-const CACHE_TTL = 30000;
+const CACHE_TTL = 60000; // 60s cache to reduce RPC calls
 
 export async function getPools(): Promise<PoolEdge[]> {
   if (_cachedPools && Date.now() - _cacheTime < CACHE_TTL) {
     return _cachedPools;
   }
-  _cachedPools = await fetchAllPools();
+
+  const fresh = await fetchAllPools();
+  _cachedPools = fresh;
   _cacheTime = Date.now();
-  return _cachedPools;
+  return fresh;
 }

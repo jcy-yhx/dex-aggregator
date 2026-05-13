@@ -127,18 +127,14 @@ export function allocationsToRoutePaths(
       pools: path.pools.map((pi) => pools[pi]?.address ?? ''),
       percentage: alloc.percentage,
       expectedOutput: alloc.expectedOutput.toString(),
-      steps: path.pools.map((pi, idx) => {
-        const stepAmount = idx === 0 ? alloc.amount.toString() : '0';
-        console.log('[allocationsToRoutePaths] idx:', idx, 'alloc.amount:', alloc.amount.toString(), 'alloc.expectedOutput:', alloc.expectedOutput.toString(), 'stepAmount:', stepAmount);
-        return {
-          pool: pools[pi]?.address ?? '',
-          adapter: '', // populated later with contract addresses
-          tokenIn: path.tokens[idx],
-          tokenOut: path.tokens[idx + 1],
-          amount: stepAmount,
-          extraData: encodeExtraData(pools[pi]),
-        };
-      }),
+      steps: path.pools.map((pi, idx) => ({
+        pool: pools[pi]?.address ?? '',
+        adapter: '', // populated later with contract addresses
+        tokenIn: path.tokens[idx],
+        tokenOut: path.tokens[idx + 1],
+        amount: idx === 0 ? alloc.amount.toString() : '0',
+        extraData: encodeExtraData(pools[pi]),
+      })),
     };
   });
 }

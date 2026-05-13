@@ -20,19 +20,10 @@ export async function POST(request: NextRequest) {
     try {
       pools = await getPools();
     } catch {
+      console.warn('[quote] pool-fetcher failed, using static fallback data');
       pools = POOLS;
     }
     const quote = await getQuote({ srcToken, dstToken, amountIn }, pools);
-
-    // DEBUG: log step amounts
-    console.log('[quote] srcToken:', srcToken, 'dstToken:', dstToken, 'amountIn:', amountIn);
-    console.log('[quote] totalOutput:', quote.totalOutput);
-    for (const r of quote.routes) {
-      console.log('[quote] route expectedOutput:', r.expectedOutput, 'steps:');
-      for (const s of r.steps) {
-        console.log('  step amount:', s.amount, 'tokenIn:', s.tokenIn, 'tokenOut:', s.tokenOut);
-      }
-    }
 
     return NextResponse.json(quote);
   } catch (error) {
