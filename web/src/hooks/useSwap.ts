@@ -5,8 +5,9 @@ import {
   useWriteContract,
   useAccount,
 } from 'wagmi';
-import { AGGREGATION_ROUTER, ADAPTER_ADDRESS } from '@/lib/contracts';
+import { AGGREGATION_ROUTER, ADAPTER_ADDRESS, ERC20_ABI } from '@/lib/contracts';
 import type { QuoteResponse } from '@/engine/types';
+import { maxUint256 } from 'viem';
 
 const WETH = (process.env.NEXT_PUBLIC_WETH_ADDRESS || '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14') as `0x${string}`;
 
@@ -21,11 +22,28 @@ export function useSwap() {
     async (quote: QuoteResponse, srcToken: `0x${string}`, amountIn: bigint, slippage: number) => {
       if (!address) return;
 
-      setStatus('swapping');
       setError(null);
 
       try {
         const isNativeETH = srcToken.toLowerCase() === WETH.toLowerCase();
+
+        // If not using native ETH, check and handle token approval
+        if (!isNativeETH) {
+          setStatus('approving');
+          const allowance = await fetchAllowance(srcToken, address, AGGREGATION_ROUTER.address);
+          if (allowance < amountIn) {
+            const hash = await writeContractAsync({
+              address: srcToken,
+              abi: ERC20_ABI,
+              functionName: 'approve',
+              args: [AGGREGATION_ROUTER.address, maxUint256],
+              gas: 100_000n,
+            });
+            setTxHash(hash);
+          }
+        }
+
+        setStatus('swapping');
 
         // Build swap calldata
         const desc = {
@@ -75,4 +93,28 @@ export function useSwap() {
   }, []);
 
   return { status, txHash, error, executeSwap, reset };
+}
+
+async function fetchAllowance(
+  token: `0x${string}`,
+  owner: `0x${string}`,
+  spender: `0x${string}`
+): Promise<bigint> {
+  try {
+    const { createPublicClient, http } = await import('viem');
+    const { sepolia } = await import('viem/chains');
+    const client = createPublicClient({
+      chain: sepolia,
+      transport: http(process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL),
+    });
+    const allowance = await client.readContract({
+      address: token,
+      abi: ERC20_ABI,
+      functionName: 'allowance',
+      args: [owner, spender],
+    });
+    return allowance as bigint;
+  } catch {
+    return 0n;
+  }
 }
