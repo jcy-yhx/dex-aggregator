@@ -1,5 +1,7 @@
 # DEX Aggregator
 
+**Project Link**: https://dex-aggregator-jcy.vercel.app/
+
 A decentralized exchange (DEX) aggregator inspired by 1inch, built as a full-stack portfolio project. Aggregates liquidity across **Uniswap V2, Uniswap V3, and Curve** to find the best swap routes using graph-based pathfinding and split-routing algorithms.
 
 **Status**: Live on Sepolia testnet ✦ WETH ↔ USDC / USDT swaps working ✦ For detailed technical docs see [learn.md](./learn.md)
