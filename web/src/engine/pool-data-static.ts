@@ -20,7 +20,7 @@ export const TOKENS: Record<string, TokenNode> = {
 };
 
 // Static fallback pools — used only when on-chain fetching is unavailable.
-// Reserves are snapshots from Sepolia block ~7650000, replaced at runtime by pool-fetcher.
+// Updated to current Sepolia chain state (block ~10838000).
 export const POOLS: PoolEdge[] = [
   // Uniswap V2 USDC-WETH
   {
@@ -28,8 +28,8 @@ export const POOLS: PoolEdge[] = [
     protocol: 'uniswap_v2',
     token0: TOKENS.USDC.address,
     token1: TOKENS.WETH.address,
-    reserve0: 62037627n,
-    reserve1: 8036637613993658n,
+    reserve0: 86359333n,
+    reserve1: 5782479538702740n,
     fee: 30,
   },
   // Uniswap V2 USDT-WETH
@@ -48,8 +48,8 @@ export const POOLS: PoolEdge[] = [
     protocol: 'uniswap_v3',
     token0: TOKENS.USDC.address,
     token1: TOKENS.WETH.address,
-    reserve0: 73252470286n,
-    reserve1: 416836906223n,
+    reserve0: 965558493168n,
+    reserve1: 62281334914631337288n,
     fee: 30,
     extraData: { feeTier: 3000 },
   },

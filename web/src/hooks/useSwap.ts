@@ -3,12 +3,12 @@
 import { useState, useCallback } from 'react';
 import {
   useWriteContract,
-  useReadContract,
   useAccount,
 } from 'wagmi';
-import { AGGREGATION_ROUTER, ERC20_ABI, ADAPTER_ADDRESS } from '@/lib/contracts';
-import type { QuoteResponse, Protocol } from '@/engine/types';
-import { parseAbiItem } from 'viem';
+import { AGGREGATION_ROUTER, ADAPTER_ADDRESS } from '@/lib/contracts';
+import type { QuoteResponse } from '@/engine/types';
+
+const WETH = (process.env.NEXT_PUBLIC_WETH_ADDRESS || '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14') as `0x${string}`;
 
 export function useSwap() {
   const { address } = useAccount();
@@ -25,13 +25,15 @@ export function useSwap() {
       setError(null);
 
       try {
+        const isNativeETH = srcToken.toLowerCase() === WETH.toLowerCase();
+
         // Build swap calldata
         const desc = {
           srcToken,
           dstToken: quote.routes[0].path[quote.routes[0].path.length - 1] as `0x${string}`,
           dstReceiver: address,
           amount: amountIn,
-          minReturnAmount: BigInt(quote.totalOutput) * BigInt(100 - Math.floor(slippage * 100)) / 100n,
+          minReturnAmount: BigInt(quote.totalOutput) * BigInt(10000 - Math.floor(slippage * 100)) / 10000n,
           flags: 0n,
           permit: '0x' as `0x${string}`,
         };
@@ -52,6 +54,8 @@ export function useSwap() {
           abi: AGGREGATION_ROUTER.abi,
           functionName: 'swap',
           args: [desc, routes],
+          value: isNativeETH ? amountIn : 0n,
+          gas: 5_000_000n,
         });
 
         setTxHash(hash);

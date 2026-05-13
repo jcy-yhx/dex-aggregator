@@ -12,7 +12,7 @@ contract UniswapV2Adapter is IAdapter {
         address tokenOut,
         uint256 amount,
         bytes calldata /* extraData */
-    ) external returns (uint256 amountOut) {
+    ) external payable returns (uint256 amountOut) {
         TransferHelper.universalApproveMax(tokenIn, pool, amount);
 
         (uint256 r0, uint256 r1, ) = IUniswapV2Pair(pool).getReserves();

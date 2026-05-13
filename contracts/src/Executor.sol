@@ -8,7 +8,7 @@ import {IAdapter} from "./adapters/IAdapter.sol";
 contract Executor {
     function executeRoute(
         RouteStep[] calldata steps
-    ) external returns (uint256 dstAmount) {
+    ) external payable returns (uint256 dstAmount) {
         for (uint256 i = 0; i < steps.length; i++) {
             RouteStep calldata step = steps[i];
 

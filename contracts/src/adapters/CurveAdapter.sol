@@ -12,7 +12,7 @@ contract CurveAdapter is IAdapter {
         address tokenOut,
         uint256 amount,
         bytes calldata extraData
-    ) external returns (uint256 amountOut) {
+    ) external payable returns (uint256 amountOut) {
         TransferHelper.universalApproveMax(tokenIn, pool, amount);
         TransferHelper.safeTransfer(tokenIn, pool, amount);
 

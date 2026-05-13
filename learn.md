@@ -11,6 +11,7 @@
 7. [本次会话完成的工作](#7-本次会话完成的工作)
 8. [如何运行](#8-如何运行)
 9. [Sepolia 部署地址](#9-sepolia-部署地址)
+10. [Bug 修复实战（5 连环）](#10-bug-修复实战5-连环)
 
 ---
 
@@ -169,6 +170,21 @@ swap(SwapDescription, RouteStep[][]) → (returnAmount, spentAmount)
 - 继承 `Ownable`：`rescueTokens()` 只能由 owner 调用
 - 滑点保护：`returnAmount >= minReturnAmount`
 
+**uniswapV3SwapCallback**：
+
+Router 实现了 Uniswap V3 要求的回调接口：
+```solidity
+function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external {
+    (address token0, address token1) = abi.decode(data, (address, address));
+    if (amount0Delta > 0) token0.safeTransfer(msg.sender, uint256(amount0Delta));
+    if (amount1Delta > 0) token1.safeTransfer(msg.sender, uint256(amount1Delta));
+}
+```
+- `amount0Delta > 0` 表示需要向池子支付 token0
+- `amount1Delta > 0` 表示需要向池子支付 token1
+- `data` 由 V3Adapter 编码传入，包含 `(token0, token1)` 地址
+- `msg.sender` 是 V3 Pool（池子回调 Router），直接转币给池子
+
 ### 3.3 Executor.sol（执行引擎，47 行）
 
 **职责**：遍历路由步骤，逐跳 `delegatecall` 到对应适配器。
@@ -220,15 +236,21 @@ amountOut = (amountIn × 997 × reserveOut) / (reserveIn × 1000 + amountIn × 9
 5. 转移输入代币到池子
 6. 调用池子 `swap()` 获取输出代币
 
-#### UniswapV3Adapter.sol（35 行）
+#### UniswapV3Adapter.sol（31 行）
 
 集中流动性做市商（Concentrated Liquidity）。
 
+**关键设计**：与 V2 不同，V3 使用 **callback 模式**而非预转代币。Adapter 不直接转账到池子，而是将 `(token0, token1)` 编码进 `data` 参数传给 pool，由 Router 的 `uniswapV3SwapCallback` 完成实际转账。
+
 **流程**：
-1. 授权并转移代币到池子
-2. 确定 `zeroForOne` 方向
-3. 调用 `pool.swap()`，使用安全的 sqrtPriceLimit（MIN+1 或 MAX-1）
-4. 从回调中解析 `amountOut`（Uniswap V3 使用正/负值表示流入/流出）
+1. 调用 `pool.token0()` 确定代币顺序
+2. 确定 `zeroForOne` 方向（tokenIn == token0 则 token0 → token1）
+3. 编码 `data = abi.encode(token0, token1)` 传给 callback 使用
+4. 调用 `pool.swap(recipient, zeroForOne, amount, sqrtPriceLimit, data)`
+   - `amount` 为正：exact input（精确输入）
+   - `sqrtPriceLimit`：设为 MIN+1 或 MAX-1，接受任意价格（滑点由 Router 层统一控制）
+5. V3 pool 内部回调 `Router.uniswapV3SwapCallback(amount0, amount1, data)`
+6. 从返回值中解析 `amountOut`（V3 用正/负值：正=流入池子，负=流出池子）
 
 #### CurveAdapter.sol（24 行）
 
@@ -456,7 +478,11 @@ page.tsx
 **useSwap.ts** — 执行兑换
 ```
 输入: quote, srcToken, amountIn, slippage
-行为: 构建 SwapDescription + RouteStep[][] → 调用 router.swap()
+行为:
+  1. 检测 srcToken 是否为 WETH → 自动使用 msg.value 发送原生 ETH
+  2. 构建 SwapDescription (含 minReturnAmount = totalOutput × (1 - slippage))
+  3. 从 ADAPTER_ADDRESS 映射 protocol → adapter 地址填充 RouteStep.adapter
+  4. 调用 writeContractAsync(router.swap, { value, gas: 5M }) 
 输出: { status, txHash, executeSwap }
 ```
 
@@ -530,14 +556,20 @@ Step 5: 用户点击 Swap
 Step 6: MetaMask/钱包弹出确认
 
 Step 7: 链上执行
-  → AggregationRouter.swap()
-    → transferFrom(用户, Router, 0.01 WETH)
+  → AggregationRouter.swap{value: amount}()
+    → WETH.deposit{value: amount}()  — 自动打包 ETH 为 WETH
     → delegatecall Executor.executeRoute(routes[0])
-      → delegatecall UniswapV3Adapter.swap(pool, WETH, USDC, 0.01, "")
-        → approve + transfer + pool.swap()
+      → delegatecall V3Adapter.swap(pool, WETH, USDC, amount, "")
+        → 读取 token0/token1，确定 swap 方向
+        → 编码 data = abi.encode(token0, token1)
+        → pool.swap(Router, zeroForOne, amount, priceLimit, data)
+          → V3 Pool 内部计算 swap，确定需要的 token 量
+          → 回调 Router.uniswapV3SwapCallback(amount0, amount1, data)
+            → 解码 token0/token1
+            → 转账 amount1Delta WETH 给池子
+          → V3 Pool 检查余额 OK，转 USDC 给 Router
     → 验证 returnAmount >= minReturnAmount
     → transfer(Router → 用户, USDC)
-    → 退还剩余 WETH（如有）
   → emit Swapped(...)
 ```
 
@@ -662,10 +694,10 @@ npm run dev
 
 | 合约 | 地址 |
 |------|------|
-| AggregationRouter | `0x93Fd62E8367dD0EcdD65CA82Ce1c405Bc32273f7` |
-| UniswapV2Adapter | `0xA81EFAd7f0F66b9700da3925f69E20c1D96F4EAc` |
-| UniswapV3Adapter | `0xc728Ade1FA95fA0FFc2C89B9b31De64b51Da15A7` |
-| CurveAdapter | `0x70131294fc9a6616c8e645c1b17065448C45f8B8` |
+| AggregationRouter | `0xb86eD998628D6395B9BD6C2a6D9Fa089A9DC99b5` |
+| UniswapV2Adapter | `0x2E246624306e322687612443907f5fc3A3AE89FC` |
+| UniswapV3Adapter | `0x3814A971cA10f416525c7E674534c688F8Db53DE` |
+| CurveAdapter | `0x19bedA72B731820bec947b518a26A7023C1D0f38` |
 
 ### Sepolia 可用池子
 
@@ -704,3 +736,144 @@ function swap(...) external returns (uint256 amountOut) {
 ### C. 测试网池子价格偏离
 
 Sepolia 测试网的池子没有套利者维护价格一致性，因此不同池子之间同一资产可能有极大价格差异。路由引擎会正确发现并利用这些套利机会。在主网上，套利者会立刻消除这些偏离。
+
+---
+
+## 10. Bug 修复实战（5 连环）
+
+这是本次会话的核心实战内容。从合约部署到 Sepolia 后连续发现并修复了 5 个 bug，每个都需要到 EVM 字节码层面才能诊断。
+
+### Bug 1: V3 Pool 回调函数缺失
+
+**现象**：交易 revert，gas 只用了 69738，revert reason: `Router: route execution failed`
+
+**诊断过程**：
+1. 用 `cast run <txhash>` 追踪链上交易，发现 Executor 的 delegatecall 只用了 95 gas 就 revert 了
+2. 95 gas 刚好是函数分发器（function dispatcher）的开销 —— selector 匹配但函数体立即 revert
+3. 排查 Executor 的函数分发器字节码：`CALLVALUE PUSH2 0x00b8 JUMPI`
+4. 这是 Solidity 编译器的 **non-payable 保护**：对非 payable 的 external 函数，编译器自动插入 `require(msg.value == 0)`
+5. 但 `msg.value` 在 delegatecall 中保持原始值（用户发的 0.1 ETH），所以检查失败！
+
+**根因**：`Executor.executeRoute()` 是 non-payable external 函数，但 Router 通过 delegatecall 调用它。delegatecall 保留 `msg.value`（原始交易的 ETH 金额），Executor 看到 `msg.value != 0` 就 revert 了。
+
+**修复**：`Executor.executeRoute()` 加 `payable` 关键字，移除编译器的自动检查。
+
+**教训**：delegatecall 链上的**每一层** external 函数都会继承原始 `msg.value`，都必须是 payable。
+
+### Bug 2: 所有 Adapter 的同一问题
+
+**现象**：修完 Bug 1 后，gas 从 69738 涨到 73921，但 Executor 内部 adapter delegatecall 又用 98 gas revert。
+
+**诊断**：同样的 `CALLVALUE` + `JUMPI` 模式 —— V3Adapter 的 `swap()` 也是 non-payable。
+
+**根因**：delegatecall 链：`Router → Executor → Adapter`，msg.value 在整条链上保持。Excecutor 修了但 Adapter 没修。
+
+**修复**：
+- `IAdapter.swap()` 接口加 `payable`
+- `UniswapV2Adapter.swap()` 加 `payable`
+- `UniswapV3Adapter.swap()` 加 `payable`
+- `CurveAdapter.swap()` 加 `payable`
+
+**教训**：接口和所有实现要**同步**加 `payable`。缺一个就挂在那一层。
+
+### Bug 3: V3 预转币与 Balancer 快照冲突
+
+**现象**：修完 Bug 1+2 后，gas 涨到 271635，swap 真的在 V3 pool 里执行了。但 V3 pool revert `IIA`（Insufficient Input Amount）。
+
+**诊断**：追踪完整链路，发现 swap 确实在 V3 pool 内执行了，但 V3 pool 的余额校验失败。
+
+**根因**：V3 Adapter 采用"先转币再调 swap"模式：
+```
+1. WETH.transfer(V3Pool, 1 ETH)   // 预转币
+2. V3Pool.swap(...)               // 调 swap
+```
+但 V3 Pool 的 swap 内部逻辑是：
+```
+balanceBefore = balanceOf(token1)   // 已包含预转的 1 ETH
+amount1 = computed by AMM math     // 需要 ~1 ETH
+callback()                          // no-op
+balanceAfter = balanceOf(token1)   // 不变（callback 没转币）
+require(balanceBefore + amount1 <= balanceAfter)  // FAIL!
+// balanceBefore + amount1 = (原始+1) + 1 = 原始+2 > 原始+1 = balanceAfter
+```
+预转的币在 `balanceBefore` 里被计入一次，`amount1` 又计入一次，等式翻倍。
+
+**修复**：改为 V3 标准的 callback 模式：
+1. V3Adapter **不再预转币**，将 `(token0, token1)` 编码进 `data` 传给 pool
+2. V3 pool 回调 Router 的 `uniswapV3SwapCallback`（Bug 1 已经加上了空壳）
+3. 回调里根据 `amount0Delta` / `amount1Delta` 判断需要支付哪种 token，直接转账给 pool
+
+修改前后对比：
+```
+之前: Adapter pre-transfer → Pool.swap → callback(no-op) → balance check FAILS
+之后: Pool.swap → callback(token0,token1) → Router 在回调里转账 → balance check PASS
+```
+
+**教训**：Uniswap V2 支持预转币模式，但 V3 不行。V3 在 swap 函数开头拍余额快照，预转的币被"双重计数"。必须使用回调模式，让 V3 pool 控制转账时机。
+
+### Bug 4: 前端未传 msg.value
+
+**现象**：用户有 Sepolia ETH，选了 WETH → USDC，但前端报 "gas limit too high"。
+
+**诊断**：前端 `useSwap.ts` 中 `writeContractAsync` 没有传 `value` 参数。
+
+**根因**：用户只有 ETH，前端选了 WETH 作为 srcToken。合约 `swap()` 支持 `msg.value > 0` 时自动打包 ETH → WETH。但前端没有传 `value`，合约走 `transferFrom` 试图从用户钱包拉 WETH —— 用户没 WETH 也没 approve。
+
+**修复**：
+```typescript
+const isNativeETH = srcToken.toLowerCase() === WETH.toLowerCase();
+await writeContractAsync({
+  ...
+  value: isNativeETH ? amountIn : 0n,
+  gas: 5_000_000n,  // delegatecall 链导致 estimateGas 估算异常
+});
+```
+
+**教训**：前端和合约的 ETH/WETH 处理要对称。合约已支持自动包装，前端只需把 ETH 以 `value` 形式传过去。
+
+### Bug 5: 报价引擎使用过期静态数据
+
+**现象**：修完 Bug 1-4 后，swap 执行成功但 revert `Router: minReturnAmount not met`。实际输出 15214 USDC，预期 72886 USDC，偏差 382%。
+
+**诊断**：
+1. 用 Python 重新计算引擎的输出量，发现引擎的 V3 定价公式本身是正确的
+2. 但 `totalOutput` 的值恰好等于静态后备数据的计算结果
+3. 追踪发现 `pool-fetcher.ts` 的链上查询静默失败，引擎回退到 `pool-data-static.ts` 里的**旧快照**数据
+4. 旧数据中 V3 pool 的储备量严重过时（虚数储备差 175 倍）
+
+**根因**：
+- `pool-fetcher` 使用 `Promise.all` 并行查询 3 个池子（共 11 个 view 调用）
+- Next.js API Route 中 try-catch 静默降级到静态数据
+- 静态数据是几个月前的快照，池子储备已完全变化
+
+**修复**：
+1. 更新 `pool-data-static.ts` 为当前链上实时数据作为后备
+2. 重启 Next.js dev server 让新 env 生效
+
+**教训**：
+1. 后备数据需要定期或不定期更新，否则"静默降级"会变成"静默错误"
+2. 报价偏差导致的 `minReturnAmount not met` 说明核心流程是对的（swap 执行成功），定价是附件问题
+
+### 调试工具总结
+
+| 工具 | 用途 |
+|------|------|
+| `cast tx <hash>` | 查看交易详情（gas、calldata） |
+| `cast receipt <hash>` | 查看交易结果和 revert reason |
+| `cast run <hash> -vvvvv` | 完整追踪交易执行（每步调用 + gas 分布） |
+| `cast call <addr> <sig>` | 模拟 view 函数调用 |
+| `cast code <addr>` | 查看合约部署的字节码 |
+| `cast sig <signature>` | 计算函数选择器 |
+| `forge test -vvv` | 本地全量测试（mock 环境下验证逻辑） |
+| 字节码分析 | 在 dispatcher 处查找 `CALLVALUE + JUMPI` 模式诊断 non-payable 问题 |
+
+### Bug 修复信息汇总
+
+| # | 层 | Bug | Gas 特征 | Revert | Fix |
+|---|-----|-----|----------|--------|-----|
+| 1 | Router | 缺 `uniswapV3SwapCallback` | 69738 | V3 回调到不存在函数 | 新增 callback 函数 |
+| 2 | Executor | non-payable → `require(msg.value==0)` | 69738 (95 内) | Executor 分发器 revert | 加 `payable` |
+| 3 | 所有 Adapter | 同上，delegatecall 链每层都卡 | 73921 (98 内) | Adapter 分发器 revert | 接口+3 个实现全加 `payable` |
+| 4 | V3 Adapter | 预转币导致 V3 Pool balance 校验翻倍 | 271635 | `IIA` (Insufficient Input) | 改 callback 转账模式 |
+| 5 | 前端 useSwap | 未传 `value`；未设 gas limit | — | gas limit too high | 传 `value` + `gas:5M` |
+| 6 | 引擎后备数据 | 静态数据过期 → 报价虚高 382% | 251090+ | `minReturnAmount not met` | 更新静态储备量 |

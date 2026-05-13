@@ -11,14 +11,16 @@ import {IWETH} from "./interfaces/IWETH.sol";
 import {Executor} from "./Executor.sol";
 import {TransferHelper} from "./libraries/TransferHelper.sol";
 
+// Ownable：合约拥有者可调用 rescueTokens 救援资金。
+// ReentrancyGuard：防止重入攻击（nonReentrant 修饰器）。
 contract AggregationRouter is Ownable, ReentrancyGuard {
     using TransferHelper for address;
 
-    uint256 private constant _PARTIAL_FILL = 0x02;
-    uint256 private constant _UNWRAP_WETH = 0x01;
+    uint256 private constant _PARTIAL_FILL = 0x02;  // 支持部分成交
+    uint256 private constant _UNWRAP_WETH = 0x01;   // 最终需要解包成 ETH
 
-    IWETH public immutable weth;
-    Executor public immutable executor;
+    IWETH public immutable weth;    //WETH 合约地址（immutable）。
+    Executor public immutable executor;     //专门执行具体交换逻辑的合约
 
     event Swapped(
         address indexed sender,
@@ -48,12 +50,14 @@ contract AggregationRouter is Ownable, ReentrancyGuard {
         }
 
         // Handle ETH -> WETH wrapping
+        //这段代码就是 “资金入口”，负责把用户的钱（不管是 ETH 还是 ERC20）安全、正确地转入 Router 合约，为后续的 swap 执行做好准备。
         if (msg.value > 0) {
+            // 用户直接发送了原生 ETH
             require(
                 desc.srcToken == address(weth),
                 "Router: srcToken must be WETH when sending ETH"
             );
-            weth.deposit{value: msg.value}();
+            weth.deposit{value: msg.value}(); // 把 ETH 包装成 WETH
             spentAmount = msg.value;
         } else {
             spentAmount = desc.amount;
@@ -120,6 +124,18 @@ contract AggregationRouter is Ownable, ReentrancyGuard {
             spentAmount,
             returnAmount
         );
+    }
+
+    function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external {
+        // Decode token addresses passed by the V3 adapter
+        (address token0, address token1) = abi.decode(data, (address, address));
+
+        if (amount0Delta > 0) {
+            token0.safeTransfer(msg.sender, uint256(amount0Delta));
+        }
+        if (amount1Delta > 0) {
+            token1.safeTransfer(msg.sender, uint256(amount1Delta));
+        }
     }
 
     function rescueTokens(address token, address to, uint256 amount) external onlyOwner {

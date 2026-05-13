@@ -72,7 +72,7 @@ export function SwapForm() {
 
   return (
     <div className="w-full max-w-lg mx-auto">
-      <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden">
+      <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100">
         {/* Header */}
         <div className="flex items-center justify-between px-5 pt-5 pb-3">
           <h2 className="text-xl font-bold text-slate-800">Swap</h2>
